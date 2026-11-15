@@ -711,9 +711,9 @@ function docKeyOf(file) {
 
 /* ---------------- 口令同步（ntfy 通道） ---------------- */
 function syncCode() { return localStorage.getItem('pr.syncCode') || ''; }
-function syncTopic(code) {
+function syncTopic(code, docKey) {
   let h1 = 0x811c9dc5, h2 = 0x01000193;
-  const s = 'paper-reader|' + code;
+  const s = 'paper-reader|' + code + '|' + (docKey || '');
   for (let i = 0; i < s.length; i++) {
     h1 = ((h1 ^ s.charCodeAt(i)) * 0x01000193) >>> 0;
     h2 = ((h2 + s.charCodeAt(i) * 131) * 0x85ebca6b) >>> 0;
@@ -739,7 +739,7 @@ const SYNC = {
     if (!code || !state.docKey) return;
     const body = JSON.stringify(this.snapshot());
     try {
-      const r = await fetch('https://ntfy.sh/' + syncTopic(code), { method: 'POST', body });
+      const r = await fetch('https://ntfy.sh/' + syncTopic(code, state.docKey), { method: 'POST', body });
       if (!r.ok) throw new Error(r.status);
       this.localAt = Date.now();
       setSyncState('已上传');
@@ -748,7 +748,7 @@ const SYNC = {
   async latest() {
     const code = syncCode();
     if (!code) return null;
-    const r = await fetch('https://ntfy.sh/' + syncTopic(code) + '/json?poll=1&since=all');
+    const r = await fetch('https://ntfy.sh/' + syncTopic(code, state.docKey) + '/json?poll=1&since=all');
     if (!r.ok) return null;
     const text = await r.text();
     let best = null;
