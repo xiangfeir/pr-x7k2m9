@@ -730,6 +730,7 @@ const SYNC = {
   timer: null,
   localAt: 0,
   lastRemote: 0,
+  lastKeepAlive: 0,
   snapshot() {
     return { docKey: state.docKey, marks: state.marks, notes: state.notes, updated: Date.now() };
   },
@@ -767,7 +768,14 @@ const SYNC = {
     if (!code || !state.docKey) return;
     try {
       const d = await this.latest();
-      if (!d) { setSyncState('云端暂无数据'); return; }
+      if (!d) {
+        setSyncState('云端暂无数据');
+        if (Date.now() - this.lastKeepAlive > 300000 && (state.marks.length + state.notes.length) > 0) {
+          this.lastKeepAlive = Date.now();
+          this.push();
+        }
+        return;
+      }
       if (!force) {
         const remote = d.updated || 0;
         if (remote <= this.lastRemote) return;
