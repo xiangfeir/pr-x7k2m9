@@ -308,6 +308,7 @@ input[type=range]{width:150px}
     <input id="sync-code" type="text" inputmode="numeric" maxlength="12" placeholder="例如 1979" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(128,128,128,.35);background:transparent;color:inherit;font-size:14px;box-sizing:border-box;margin-top:10px">
     <div class="sub" style="margin-top:8px;line-height:1.6">任何知道这个码的人都能读取和修改你的批注，别用生日这类好猜的数字。</div>
     <div id="sync-state" class="sub" style="margin-top:6px"></div>
+    <div id="sync-diag" class="sub" style="margin-top:4px;word-break:break-all;font-size:11px;opacity:.7"></div>
     <div class="foot">
       <button class="btn" id="sync-pull-btn">立即拉取</button>
       <button class="btn primary" id="sync-save">保存并同步</button>
@@ -943,6 +944,7 @@ async function openData(data, name) {
   state.marks = [];
   state.notes = [];
   const saved = await Store.get(state.docKey);
+  setTimeout(() => { try { queueSync(); } catch (e) { /* ignore */ } }, 1500);
   if (saved) {
     state.marks = Array.isArray(saved.marks) ? saved.marks : [];
     state.notes = Array.isArray(saved.notes) ? saved.notes : [];
@@ -1909,6 +1911,12 @@ function bindUI() {
     $('#modal-more').classList.add('hidden');
     $('#sync-code').value = syncCode();
     setSyncState(syncCode() ? '当前同步码：' + syncCode() : '未设置');
+    const dg = $('#sync-diag');
+    if (dg) {
+      dg.textContent = state.docKey
+        ? ('本机标识 ' + state.docKey + ' · 通道 ' + syncTopic(syncCode(), state.docKey))
+        : '尚未打开文档';
+    }
     $('#modal-sync').classList.remove('hidden');
   });
   $('#sync-save').addEventListener('click', async () => {
