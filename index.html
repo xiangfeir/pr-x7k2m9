@@ -312,7 +312,10 @@ input[type=range]{width:150px}
       <button class="btn" id="sync-pull-btn">立即拉取</button>
       <button class="btn primary" id="sync-save">保存并同步</button>
     </div>
-    <button class="btn" id="sync-off" style="margin-top:8px;width:100%">停止同步</button>
+    <div class="foot" style="margin-top:8px">
+      <button class="btn" id="sync-off">停止同步</button>
+      <button class="btn" data-close="modal-sync">关闭</button>
+    </div>
   </div>
 </div>
 
@@ -855,6 +858,11 @@ async function openFile(file) {
 }
 
 async function openData(data, name) {
+  let fileHash = '';
+  try {
+    const hb = await crypto.subtle.digest('SHA-256', data);
+    fileHash = Array.from(new Uint8Array(hb)).slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch (e) { /* ignore */ }
   stopSpeak();
   if (state.pdf) { try { state.pdf.destroy(); } catch { /* ignore */ } }
   state.pdf = null;
@@ -920,7 +928,17 @@ async function openData(data, name) {
   $('#pages').classList.remove('hidden');
   $('#empty').classList.add('hidden');
 
-  state.docKey = `doc_${state.docName}_${bytes}_${state.pageCount}`.replace(/[^\w\u4e00-\u9fa5.-]+/g, '_');
+  const legacyKey = `doc_${state.docName}_${bytes}_${state.pageCount}`.replace(/[^\w\u4e00-\u9fa5.-]+/g, '_');
+  state.docKey = fileHash ? ('doc_' + fileHash) : legacyKey;
+  if (fileHash) {
+    try {
+      const cur = await Store.get(state.docKey);
+      if (!cur) {
+        const old = await Store.get(legacyKey);
+        if (old) await Store.set(state.docKey, old);
+      }
+    } catch (e) { /* ignore */ }
+  }
 
   state.marks = [];
   state.notes = [];
