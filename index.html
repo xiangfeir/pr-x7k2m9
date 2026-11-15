@@ -128,6 +128,16 @@ button{font-family:inherit}
 .card .acts button{width:30px;height:30px;border:none;border-radius:8px;background:transparent;
   color:var(--text-faint);font-size:15px;cursor:pointer}
 .card .acts button:active{background:#2a313b;color:var(--text)}
+.card.collapsed{max-height:none;overflow:hidden;padding-bottom:8px}
+.card.collapsed .head{margin-bottom:0}
+.card.collapsed .body,
+.card.collapsed .rel,
+.card.collapsed .srcs,
+.card.collapsed .err,
+.card.collapsed .meta,
+.card.collapsed .trans-main,
+.card.collapsed .trans-alt,
+.card.collapsed .trans-reason{display:none}
 .card .err{color:var(--danger);font-size:12.5px;margin-top:4px;word-break:break-word}
 .card.loading{opacity:.82}
 .card.loading .body::after{content:"";display:block;height:2px;margin-top:10px;border-radius:2px;
@@ -690,7 +700,7 @@ function saveSoon() {
       marks: state.marks,
       notes: state.notes.map(({ id, page, side, anchor, rects, quote, type, parentId, created, kind,
         headline, detail, logic, context_fit, related, meta, question, translation, alternatives,
-        chosen_reason, expand, direction, error }) => ({
+        chosen_reason, expand, direction, error, collapsed }) => ({
         id, page, side, anchor, rects, quote, type, parentId, created, kind,
         headline, detail, logic, context_fit, related, meta, question, translation, alternatives,
         chosen_reason, expand, direction, error,
@@ -1318,14 +1328,14 @@ function drawWire(p, note, side, el) {
 function buildCard(note, depth) {
   const el = document.createElement('div');
   const d = Math.min(depth, 3);
-  el.className = `card${depth > 0 ? ` child d${d}` : ''}${note.loading ? ' loading' : ''}`;
+  el.className = `card${depth > 0 ? ` child d${d}` : ''}${note.loading ? ' loading' : ''}${note.collapsed ? ' collapsed' : ''}`;
   el.dataset.id = note.id;
   el.dataset.detail = note.detail || '';
 
   const acts = document.createElement('div');
   acts.className = 'acts';
   const btn = (act, text, title) => `<button data-act="${act}" title="${title}">${text}</button>`;
-  let html = '';
+  let html = btn('collapse', note.collapsed ? '▸' : '▾', '折叠 / 展开');
   if (note.type === 'explain' || note.type === 'ask') html += btn('refresh', '↻', '重新生成');
   html += btn('speak', state.speaking === `note:${note.id}` ? '⏹' : '♪', '朗读');
   html += btn('copy', '⧉', '复制');
@@ -1905,6 +1915,13 @@ function bindUI() {
     const note = noteById(card.dataset.id);
     if (!note) return;
     const act = btn.dataset.act;
+    if (act === 'collapse') {
+      const on = card.classList.toggle('collapsed');
+      btn.textContent = on ? '▸' : '▾';
+      note.collapsed = on;
+      saveSoon();
+      return;
+    }
     if (act === 'delete') { removeNote(note.id); return; }
     if (act === 'refresh') { refreshNote(note); return; }
     if (act === 'speak') {
