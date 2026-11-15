@@ -293,12 +293,29 @@ input[type=range]{width:150px}
     <div class="foot" style="flex-direction:column;align-items:stretch;gap:8px;margin-top:6px">
       <button class="btn" id="btn-settings">设置</button>
       <button class="btn" id="btn-ai">AI 配置</button>
+      <button class="btn" id="btn-sync">同步码</button>
     </div>
     <div class="foot"><button class="btn" data-close="modal-more" style="width:100%">关闭</button></div>
   </div>
 </div>
 
 <!-- 内嵌 PDF.js（不依赖网络） -->
+<!-- 同步码弹窗 -->
+<div id="modal-sync" class="modal hidden">
+  <div class="box" style="max-width:420px">
+    <h3>同步码</h3>
+    <div class="sub" style="line-height:1.6">在另一台设备输入同一个同步码，就能看到这篇论文的批注与词条。只同步标注数据，不上传 PDF。</div>
+    <input id="sync-code" type="text" inputmode="numeric" maxlength="12" placeholder="例如 1979" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(128,128,128,.35);background:transparent;color:inherit;font-size:14px;box-sizing:border-box;margin-top:10px">
+    <div class="sub" style="margin-top:8px;line-height:1.6">任何知道这个码的人都能读取和修改你的批注，别用生日这类好猜的数字。</div>
+    <div id="sync-state" class="sub" style="margin-top:6px"></div>
+    <div class="foot">
+      <button class="btn" id="sync-pull-btn">立即拉取</button>
+      <button class="btn primary" id="sync-save">保存并同步</button>
+    </div>
+    <button class="btn" id="sync-off" style="margin-top:8px;width:100%">停止同步</button>
+  </div>
+</div>
+
 <!-- AI 配置弹窗 -->
 <div id="modal-ai" class="modal hidden">
   <div class="box" style="max-width:420px">
@@ -692,6 +709,85 @@ function docKeyOf(file) {
   return `doc_${file.name}_${file.size}_${state.pageCount}`.replace(/[^\w\u4e00-\u9fa5.-]+/g, '_');
 }
 
+/* ---------------- 口令同步（ntfy 通道） ---------------- */
+function syncCode() { return localStorage.getItem('pr.syncCode') || ''; }
+function syncTopic(code) {
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  const s = 'paper-reader|' + code;
+  for (let i = 0; i < s.length; i++) {
+    h1 = ((h1 ^ s.charCodeAt(i)) * 0x01000193) >>> 0;
+    h2 = ((h2 + s.charCodeAt(i) * 131) * 0x85ebca6b) >>> 0;
+  }
+  return 'prs' + h1.toString(36) + h2.toString(36);
+}
+function setSyncState(msg, isErr) {
+  const el = $('#sync-state');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.style.color = isErr ? 'var(--danger)' : '';
+}
+const SYNC = {
+  timer: null,
+  localAt: 0,
+  lastRemote: 0,
+  snapshot() {
+    return { docKey: state.docKey, marks: state.marks, notes: state.notes, updated: Date.now() };
+  },
+  async push() {
+    const code = syncCode();
+    if (!code || !state.docKey) return;
+    const body = JSON.stringify(this.snapshot());
+    try {
+      const r = await fetch('https://ntfy.sh/' + syncTopic(code), { method: 'POST', body });
+      if (!r.ok) throw new Error(r.status);
+      this.localAt = Date.now();
+      setSyncState('已上传');
+    } catch (e) { setSyncState('上传失败', true); }
+  },
+  async latest() {
+    const code = syncCode();
+    if (!code) return null;
+    const r = await fetch('https://ntfy.sh/' + syncTopic(code) + '/json?poll=1&since=all');
+    if (!r.ok) return null;
+    const text = await r.text();
+    let best = null;
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const ev = JSON.parse(line);
+        if (ev.event !== 'message' || !ev.message) continue;
+        const d = JSON.parse(ev.message);
+        if (d && d.docKey === state.docKey && (!best || (d.updated || 0) > (best.updated || 0))) best = d;
+      } catch (e2) { /* ignore */ }
+    }
+    return best;
+  },
+  async pull(force) {
+    const code = syncCode();
+    if (!code || !state.docKey) return;
+    try {
+      const d = await this.latest();
+      if (!d) { setSyncState('云端暂无数据'); return; }
+      if (!force) {
+        const remote = d.updated || 0;
+        if (remote <= this.lastRemote) return;
+        if (remote < this.localAt) return;
+      }
+      state.marks = d.marks || [];
+      state.notes = d.notes || [];
+      this.lastRemote = d.updated || 0;
+      repaintAll();
+      renderCards();
+      setSyncState('已从云端拉取');
+    } catch (e) { setSyncState('拉取失败', true); }
+  },
+};
+function queueSync() {
+  if (!syncCode()) return;
+  clearTimeout(SYNC.timer);
+  SYNC.timer = setTimeout(() => SYNC.push(), 1500);
+}
+
 function saveSoon() {
   if (state.saveTimer) clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(async () => {
@@ -709,6 +805,7 @@ function saveSoon() {
       pageCount: state.pageCount,
     });
     state.saveOk = ok;
+    if (ok) queueSync();
     setSaveState(ok ? 'ok' : 'warn', ok ? '已保存' : '仅本次');
     if (!ok && !state.warned) {
       state.warned = true;
@@ -1782,6 +1879,33 @@ function bindUI() {
     if (state.saveOk === false) exportAnnotations();
   });
   $('#btn-more').addEventListener('click', () => $('#modal-more').classList.remove('hidden'));
+  $('#btn-sync').addEventListener('click', () => {
+    $('#modal-more').classList.add('hidden');
+    $('#sync-code').value = syncCode();
+    setSyncState(syncCode() ? '当前同步码：' + syncCode() : '未设置');
+    $('#modal-sync').classList.remove('hidden');
+  });
+  $('#sync-save').addEventListener('click', async () => {
+    const v = $('#sync-code').value.trim();
+    if (!/^\d{4,12}$/.test(v)) { setSyncState('请输入 4-12 位数字', true); return; }
+    localStorage.setItem('pr.syncCode', v);
+    setSyncState('已保存，正在同步…');
+    await SYNC.push();
+    await SYNC.pull(true);
+    setSyncState('同步码 ' + v + ' 已生效');
+    toast('同步码已生效', 'ok');
+  });
+  $('#sync-pull-btn').addEventListener('click', async () => {
+    if (!syncCode()) { setSyncState('请先设置同步码', true); return; }
+    setSyncState('拉取中…');
+    await SYNC.pull(true);
+  });
+  $('#sync-off').addEventListener('click', () => {
+    localStorage.removeItem('pr.syncCode');
+    $('#sync-code').value = '';
+    setSyncState('已停止同步');
+  });
+  setInterval(() => { if (syncCode() && state.docKey) SYNC.pull(false); }, 20000);
   $('#btn-ai').addEventListener('click', () => {
     $('#modal-more').classList.add('hidden');
     $('#ai-base').value = localStorage.getItem('pr.baseUrl') || 'https://api.commandcode.ai/provider/v1';
