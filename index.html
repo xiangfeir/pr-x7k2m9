@@ -769,8 +769,15 @@ const SYNC = {
       if (!line.trim()) continue;
       try {
         const ev = JSON.parse(line);
-        if (ev.event !== 'message' || !ev.message) continue;
-        const d = JSON.parse(ev.message);
+        if (ev.event !== 'message') continue;
+        let payload = ev.message;
+        if (ev.attachment && ev.attachment.url) {
+          const ar = await fetch(ev.attachment.url);
+          if (!ar.ok) continue;
+          payload = await ar.text();
+        }
+        if (!payload) continue;
+        const d = JSON.parse(payload);
         if (d && d.docKey === state.docKey && (!best || (d.updated || 0) > (best.updated || 0))) best = d;
       } catch (e2) { /* ignore */ }
     }
