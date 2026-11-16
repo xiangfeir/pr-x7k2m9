@@ -780,6 +780,18 @@ function syncTopic(code, docKey) {
   }
   return 'prs' + h1.toString(36) + h2.toString(36);
 }
+/* 公共 ntfy 实例：不同网络环境能连上的不一样，多通道互相兜底 */
+const NTFY_HOSTS = [
+  'https://ntfy.sh',
+  'https://ntfy.envs.net',
+  'https://ntfy.adminforge.de',
+  'https://ntfy.mzte.de',
+];
+function ntfyFetch(url, opts) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 8000);
+  return fetch(url, Object.assign({}, opts || {}, { signal: ctl.signal })).finally(() => clearTimeout(timer));
+}
 function setSyncState(msg, isErr) {
   const el = $('#sync-state');
   if (!el) return;
@@ -805,20 +817,25 @@ const SYNC = {
         const rc = cur ? ((cur.marks || []).length + (cur.notes || []).length) : 0;
         if (rc > 0) { setSyncState('本机为空，已阻止覆盖云端 ' + rc + ' 条'); return; }
       }
-      const r = await fetch('https://ntfy.sh/' + syncTopic(code, state.docKey), {
-        method: 'POST',
-        body: JSON.stringify(snap),
-      });
-      if (!r.ok) throw new Error(r.status);
+      const topic = syncTopic(code, state.docKey);
+      const body = JSON.stringify(snap);
+      const results = await Promise.allSettled(NTFY_HOSTS.map(async (host) => {
+        const r = await ntfyFetch(host + '/' + topic, { method: 'POST', body });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return host;
+      }));
+      const okCount = results.filter((r) => r.status === 'fulfilled').length;
+      if (!okCount) {
+        const failed = results.find((r) => r.status === 'rejected');
+        throw new Error((failed && failed.reason && failed.reason.message) || '网络不可达');
+      }
       this.localAt = Date.now();
-      setSyncState('已上传 ' + localCount + ' 条');
-    } catch (e) { setSyncState('上传失败', true); }
+      setSyncState('已上传 ' + localCount + ' 条（' + okCount + '/' + NTFY_HOSTS.length + ' 条通道）');
+    } catch (e) { setSyncState('上传失败：' + (e.message || '网络错误'), true); }
   },
-  async latest() {
-    const code = syncCode();
-    if (!code) return null;
-    const r = await fetch('https://ntfy.sh/' + syncTopic(code, state.docKey) + '/json?poll=1&since=all');
-    if (!r.ok) return null;
+  async _readHost(host, topic) {
+    const r = await ntfyFetch(host + '/' + topic + '/json?poll=1&since=all');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
     const text = await r.text();
     let best = null;
     for (const line of text.split('\n')) {
@@ -828,7 +845,7 @@ const SYNC = {
         if (ev.event !== 'message') continue;
         let payload = ev.message;
         if (ev.attachment && ev.attachment.url) {
-          const ar = await fetch(ev.attachment.url);
+          const ar = await ntfyFetch(ev.attachment.url);
           if (!ar.ok) continue;
           payload = await ar.text();
         }
@@ -836,6 +853,18 @@ const SYNC = {
         const d = JSON.parse(payload);
         if (d && d.docKey === state.docKey && (!best || (d.updated || 0) > (best.updated || 0))) best = d;
       } catch (e2) { /* ignore */ }
+    }
+    return best;
+  },
+  async latest() {
+    const code = syncCode();
+    if (!code || !state.docKey) return null;
+    const topic = syncTopic(code, state.docKey);
+    const results = await Promise.allSettled(NTFY_HOSTS.map((host) => this._readHost(host, topic)));
+    let best = null;
+    for (const r of results) {
+      if (r.status !== 'fulfilled' || !r.value) continue;
+      if (!best || (r.value.updated || 0) > (best.updated || 0)) best = r.value;
     }
     return best;
   },
