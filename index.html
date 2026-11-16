@@ -239,6 +239,15 @@ body.compact .page-shell .gutter .badge{font-size:9.5px;padding:1px 5px;margin-b
 .mm-empty{display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-faint);
   font-size:13px;text-align:center;line-height:1.9}
 
+
+/* ---------------- 子词条横向泳道 ---------------- */
+.child-lane{position:absolute;left:10px;right:10px;display:flex;gap:8px;overflow-x:auto;
+  overflow-y:hidden;pointer-events:auto;padding:2px 2px 10px;z-index:3;-webkit-overflow-scrolling:touch}
+.page-shell .gutter .child-lane .card{position:relative!important;top:auto!important;
+  left:auto!important;right:auto!important;flex:0 0 auto;margin:0;
+  width:calc(var(--gutter,220px) * 0.8);max-height:min(340px,52vh);overflow:auto}
+.page-shell .gutter .child-lane .card.child{font-size:12.8px}
+.page-shell .gutter .child-lane .card .acts{top:3px;right:3px}
 </style>
 </head>
 <body>
@@ -1492,6 +1501,15 @@ function renderCards() {
   }
   for (const list of byParent.values()) list.sort((a, b) => (a.created || 0) - (b.created || 0));
   const roots = byParent.get(null) || [];
+  const kidsOf = (id) => byParent.get(id) || [];
+
+  /* 收集所有后代：祖先折叠时不展开它的子树 */
+  const collect = (id, depth, out) => {
+    for (const child of kidsOf(id)) {
+      out.push({ note: child, depth });
+      if (!child.collapsed) collect(child.id, depth + 1, out);
+    }
+  };
 
   for (const p of state.pages) {
     const pageNo = Number(p.el.dataset.page);
@@ -1503,10 +1521,33 @@ function renderCards() {
         .filter((n) => n.page === pageNo && (n.side || 'right') === side)
         .sort((a, b) => (a.anchor?.y ?? 0) - (b.anchor?.y ?? 0));
       let cursor = 0;
-      const placed = new Map();
       for (const note of list) {
-        cursor = placeTree(note, gutter, 0, cursor, paperH, placed);
-        if (note.anchor) drawWire(p, note, side, placed.get(note.id));
+        const el = buildCard(note, 0);
+        el.style.top = '0px';
+        gutter.appendChild(el);
+        const desired = note.anchor ? note.anchor.y * paperH - 30 : cursor;
+        const top = Math.round(Math.max(cursor, Math.min(desired, Math.max(0, paperH - 80))));
+        el.style.top = `${top}px`;
+        cursor = top + el.offsetHeight + 8;
+        if (note.anchor) drawWire(p, note, side, el);
+
+        if (note.collapsed) continue;
+        const kids = [];
+        collect(note.id, 1, kids);
+        if (!kids.length) continue;
+
+        /* 子词条放进一条横向泳道，不再竖向堆叠 */
+        const lane = document.createElement('div');
+        lane.className = 'child-lane';
+        lane.style.top = `${top + el.offsetHeight + 6}px`;
+        for (const item of kids) {
+          const childEl = buildCard(item.note, item.depth);
+          childEl.classList.add('in-lane');
+          childEl.style.setProperty('--indent', '0px');
+          lane.appendChild(childEl);
+        }
+        gutter.appendChild(lane);
+        cursor = Math.max(cursor, (parseFloat(lane.style.top) || 0) + lane.offsetHeight + 10);
       }
       for (const el of gutter.children) {
         maxBottom = Math.max(maxBottom, (parseFloat(el.style.top) || 0) + el.offsetHeight + 22);
@@ -1514,25 +1555,6 @@ function renderCards() {
     }
     if (maxBottom > paperH) p.shell.style.minHeight = `${Math.round(maxBottom)}px`;
   }
-}
-
-/** 递归放置一张卡片及其子卡片，返回新的底部游标 */
-function placeTree(note, gutter, depth, minTop, paperH, placed) {
-  const el = buildCard(note, depth);
-  el.style.setProperty('--indent', `${Math.min(depth, 3) * 14}px`);
-  el.style.top = '0px';
-  gutter.appendChild(el);
-  placed.set(note.id, el);
-
-  const desired = note.anchor ? note.anchor.y * paperH - 30 : minTop;
-  const top = Math.round(Math.max(minTop, Math.min(desired, Math.max(0, paperH - 80))));
-  el.style.top = `${top}px`;
-
-  let cursor = top + el.offsetHeight + 8;
-  for (const child of childrenOf(note.id)) {
-    cursor = placeTree(child, gutter, depth + 1, cursor, paperH, placed);
-  }
-  return cursor;
 }
 
 function drawWire(p, note, side, el) {
@@ -2191,9 +2213,9 @@ function bindUI() {
     if (!note) return;
     const act = btn.dataset.act;
     if (act === 'collapse') {
-      const on = card.classList.toggle('collapsed');
-      btn.textContent = on ? '▸' : '▾';
+      const on = !note.collapsed;
       note.collapsed = on;
+      renderCards();
       saveSoon();
       return;
     }
