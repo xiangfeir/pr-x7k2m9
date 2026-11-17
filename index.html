@@ -248,6 +248,8 @@ body.compact .page-shell .gutter .badge{font-size:9.5px;padding:1px 5px;margin-b
   width:calc(var(--gutter,220px) * 0.8);max-height:min(340px,52vh);overflow:auto}
 .page-shell .gutter .child-lane .card.child{font-size:12.8px}
 .page-shell .gutter .child-lane .card .acts{top:3px;right:3px}
+
+.card .srcs .src-cap{font-size:11px;color:var(--text-faint);margin-bottom:2px}
 </style>
 </head>
 <body>
@@ -287,6 +289,10 @@ body.compact .page-shell .gutter .badge{font-size:9.5px;padding:1px 5px;margin-b
     <h3>针对这段文字提问</h3>
     <div class="sel" id="ask-sel"></div>
     <textarea id="ask-text" placeholder="例如：作者为什么用这个对照？这个结论的证据强度如何？"></textarea>
+    <label class="row" style="justify-content:flex-start;gap:8px;padding:4px 0">
+      <input type="checkbox" id="ask-web" style="width:18px;height:18px;accent-color:#3b82f6">
+      <span>联网检索</span><span class="sub">补充论文外的知识，回答会标注外部来源</span>
+    </label>
     <div class="foot">
       <button class="btn" data-close="modal-ask">取消</button>
       <button class="btn primary" id="ask-submit">提交</button>
@@ -662,7 +668,7 @@ const P_ASK = `你是学生的论文精读助手。学生选中了论文中的�
   "detail": "回答正文，中文，不超过 200 字，最多 3 条要点。先给答案，再给依据。", "logic": "", "context_fit": "",
   "related": ["最多 2 个相关术语"] }
 
-硬性要求：只依据 <context> 与 <selection>，以及 <marks> 中读者已标注的内容；信息不足时直说缺什么，不要编造；回答要短；只输出 JSON，不要代码块围栏。`;
+硬性要求：论文内的问题只依据 <context>、<selection> 与 <marks>；<web> 是外部检索资料，当问题超出论文范围时可依据 <web> 补充回答，引用处标注 [1][2]，并说明"这是论文之外的外部资料"；绝不要编造 <web> 里没有的链接、文献或数据，<web> 为空时不要假装联网；回答要短；只输出 JSON，不要代码块围栏。`;
 
 const P_TRANS = `你是生物医学领域的专业学术翻译，熟悉癌症生物学、单细胞/空间组学、临床试验、统计学的标准译名。
 学生圈选了一个词或短语，你要结合论文上下文给出最贴切的译文。原文主要是中文则翻成英文（zh2en），主要是英文则翻成中文（en2zh）。
@@ -1364,7 +1370,7 @@ async function doExplain(sel) {
   saveSoon();
 }
 
-async function doAsk(sel, question) {
+async function doAsk(sel, question, useWeb) {
   const note = Object.assign(baseNote(sel, 'ask'), {
     question, kind: 'other', headline: '回答中…', detail: '', logic: '', context_fit: '', related: [],
   });
@@ -1374,11 +1380,20 @@ async function doAsk(sel, question) {
   renderCards();
   jumpToNote(note.id, false);
 
+  let sources = [];
+  let webBlock = '（本次未开启联网检索）';
+  if (useWeb) {
+    try { sources = await webSearch(question); } catch { sources = []; }
+    webBlock = sources.length
+      ? `（以下为外部资料，非论文原文）\n<web>\n${formatWeb(sources)}\n</web>`
+      : '（联网已开启，但这次没有检索到相关资料）';
+  }
+
   const messages = [
     { role: 'system', content: `${P_ASK}\n${GUARD}` },
     {
       role: 'user',
-      content: `论文：${state.docName}\n所在页码：第 ${sel.page} 页\n<marks>\n${markupSummary()}\n</marks>\n<context>\n${truncate(sel.parentDetail || '', 1800)}\n</context>\n\n<selection>\n${sel.text}\n</selection>\n\n<question>\n${question}\n</question>\n\n请回答 <question>，严格按 JSON 输出。`,
+      content: `论文：${state.docName}\n所在页码：第 ${sel.page} 页\n<marks>\n${markupSummary()}\n</marks>\n<context>\n${truncate(sel.parentDetail || '', 1800)}\n</context>\n\n<selection>\n${sel.text}\n</selection>\n\n${webBlock}\n\n<question>\n${question}\n</question>\n\n请回答 <question>，严格按 JSON 输出。`,
     },
   ];
 
@@ -1388,6 +1403,7 @@ async function doAsk(sel, question) {
       loading: false, kind: res.kind || 'other', headline: res.headline || '回答',
       detail: res.detail || '', context_fit: res.context_fit || '',
       related: Array.isArray(res.related) ? res.related.slice(0, 2) : [],
+      sources,
       meta: { model: AI.models.strong },
     });
   } catch (err) {
@@ -1654,6 +1670,10 @@ function relatedChips(note) {
 function sourceLinks(note) {
   const wrap = document.createElement('div');
   wrap.className = 'srcs';
+  const cap = document.createElement('div');
+  cap.className = 'src-cap';
+  cap.textContent = '外部资料（非论文原文）';
+  wrap.appendChild(cap);
   (note.sources || []).forEach((s, i) => {
     const a = document.createElement('a');
     a.href = s.url || '#';
@@ -2032,6 +2052,10 @@ function bindUI() {
   $('#doc-web').addEventListener('change', (e) => {
     localStorage.setItem('pr.docWeb', e.target.checked ? '1' : '0');
   });
+  $('#ask-web').checked = localStorage.getItem('pr.askWeb') === '1';
+  $('#ask-web').addEventListener('change', (e) => {
+    localStorage.setItem('pr.askWeb', e.target.checked ? '1' : '0');
+  });
   $('#save-state').addEventListener('click', () => {
     if (state.saveOk === false) exportAnnotations();
   });
@@ -2174,7 +2198,7 @@ function bindUI() {
     $('#modal-ask').classList.add('hidden');
     hideSelbar();
     if (!sel) return;
-    doAsk(sel, q);
+    doAsk(sel, q, $('#ask-web').checked);
   });
 
   /* 页面点按：命中词条锚点则跳到卡片（不拦截选字，用坐标判定） */
